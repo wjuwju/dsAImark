@@ -4,12 +4,11 @@ import schedule
 from openai import OpenAI
 import ccxt
 import pandas as pd
-from datetime import datetime
-import json
-import requests
 import re
 from dotenv import load_dotenv
-
+import json
+import requests
+from datetime import datetime, timedelta
 load_dotenv()
 
 # 初始化DeepSeek客户端
@@ -142,11 +141,6 @@ def get_support_resistance_levels(df, lookback=20):
     except Exception as e:
         print(f"支撑阻力计算失败: {e}")
         return {}
-
-
-import json
-import requests
-from datetime import datetime, timedelta
 
 
 def get_sentiment_indicators():
@@ -720,15 +714,28 @@ def wait_for_next_period():
     current_minute = now.minute
     current_second = now.second
 
-    # 计算到下一个15分钟整点的等待时间
-    remainder = current_minute % 15
-    if remainder == 0 and current_second < 10:  # 整点前10秒内立即执行
-        return 0
+    # 计算下一个整点时间（00, 15, 30, 45分钟）
+    next_period_minute = ((current_minute // 15) + 1) * 15
+    if next_period_minute == 60:
+        next_period_minute = 0
 
-    minutes_to_wait = 15 - remainder
+    # 计算需要等待的总秒数
+    if next_period_minute > current_minute:
+        minutes_to_wait = next_period_minute - current_minute
+    else:
+        minutes_to_wait = 60 - current_minute + next_period_minute
+
     seconds_to_wait = minutes_to_wait * 60 - current_second
 
-    print(f"🕒 等待 {minutes_to_wait} 分 {60 - current_second} 秒到整点...")
+    # 显示友好的等待时间
+    display_minutes = minutes_to_wait - 1 if current_second > 0 else minutes_to_wait
+    display_seconds = 60 - current_second if current_second > 0 else 0
+
+    if display_minutes > 0:
+        print(f"🕒 等待 {display_minutes} 分 {display_seconds} 秒到整点...")
+    else:
+        print(f"🕒 等待 {display_seconds} 秒到整点...")
+
     return seconds_to_wait
 
 
