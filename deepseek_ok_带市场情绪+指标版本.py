@@ -6,6 +6,7 @@ import ccxt
 import pandas as pd
 from datetime import datetime
 import json
+import requests
 import re
 from dotenv import load_dotenv
 
@@ -141,6 +142,108 @@ def get_support_resistance_levels(df, lookback=20):
     except Exception as e:
         print(f"支撑阻力计算失败: {e}")
         return {}
+
+
+import json
+import requests
+from datetime import datetime, timedelta
+
+
+def get_sentiment_indicators():
+    """获取情绪指标 - 修复空值问题版本"""
+    try:
+        API_URL = "https://service.cryptoracle.network/openapi/v2/endpoint"
+        API_KEY = "b54bcf4d-1bca-4e8e-9a24-22ff2c3d76d5"
+
+        # 获取最近4小时数据
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=4)
+
+        request_body = {
+            "apiKey": API_KEY,
+            "endpoints": ["CO-A-02-01", "CO-A-02-02", "CO-A-01-03"],
+            "startTime": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "endTime": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "timeType": "15m",
+            "token": ["BTC"]
+        }
+
+        headers = {"Content-Type": "application/json", "X-API-KEY": API_KEY}
+        response = requests.post(API_URL, json=request_body, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("code") == 200 and data.get("data"):
+                time_periods = data["data"][0]["timePeriods"]
+
+                # 🔴 修复：查找第一个有有效数据的时间段（跳过空值）
+                for period in time_periods:
+                    period_data = period.get("data", [])
+
+                    # 检查这个时间段是否有有效数据
+                    sentiment = {}
+                    community_activity = None
+                    valid_data_found = False
+
+                    for item in period_data:
+                        endpoint = item.get("endpoint")
+                        value = item.get("value", "").strip()
+
+                        if value:  # 只处理非空值
+                            if endpoint in ["CO-A-02-01", "CO-A-02-02"]:
+                                sentiment[endpoint] = float(value)
+                                valid_data_found = True
+                            elif endpoint == "CO-A-01-03":
+                                community_activity = float(value)
+
+                    # 如果找到有效数据，就使用这个时间段
+                    if valid_data_found and "CO-A-02-01" in sentiment and "CO-A-02-02" in sentiment:
+                        positive = sentiment['CO-A-02-01']
+                        negative = sentiment['CO-A-02-02']
+                        net_sentiment = positive - negative
+
+                        print(
+                            f"✅ 使用情绪数据时间: {period['startTime']} (延迟: {(datetime.now() - datetime.strptime(period['startTime'], '%Y-%m-%d %H:%M:%S')).seconds // 60}分钟)")
+
+                        return {
+                            'positive_ratio': positive,
+                            'negative_ratio': negative,
+                            'net_sentiment': net_sentiment,
+                            'sentiment_strength': abs(net_sentiment),
+                            'bullish_bias': net_sentiment > 0.1,
+                            'bearish_bias': net_sentiment < -0.1,
+                            'community_activity': community_activity,
+                            'data_time': period['startTime'],
+                            'data_delay_minutes': (datetime.now() - datetime.strptime(period['startTime'],
+                                                                                      '%Y-%m-%d %H:%M:%S')).seconds // 60
+                        }
+
+                print("❌ 所有时间段数据都为空")
+                return None
+
+        return None
+    except Exception as e:
+        print(f"情绪指标获取失败: {e}")
+        return None
+
+
+# 测试
+result = get_sentiment_indicators()
+if result:
+    print("\n🎯 情绪指标结果:")
+    print(f"  乐观情绪: {result['positive_ratio']:.1%}")
+    print(f"  悲观情绪: {result['negative_ratio']:.1%}")
+    print(f"  情绪净值: {result['net_sentiment']:+.3f}")
+    print(f"  情绪强度: {result['sentiment_strength']:.1%}")
+    print(f"  看涨偏见: {result['bullish_bias']}")
+    print(f"  看跌偏见: {result['bearish_bias']}")
+    if result.get('community_activity') is not None:
+        print(f"  社区活跃度: {result['community_activity']:.0f}")
+    if result.get('activity_text'):
+        print(f"  {result['activity_text']}")
+    print(f"  数据状态: {result.get('data_status', '未知')}")
+else:
+    print("❌ 获取情绪指标失败")
 
 
 def get_market_trend(df):
@@ -343,6 +446,26 @@ def analyze_with_deepseek(price_data):
         last_signal = signal_history[-1]
         signal_text = f"\n【上次交易信号】\n信号: {last_signal.get('signal', 'N/A')}\n信心: {last_signal.get('confidence', 'N/A')}"
 
+    # 获取情绪数据
+    sentiment_data = get_sentiment_indicators()
+    # 构建简洁的情绪文本 - 修复版本
+    if sentiment_data:
+        sign = '+' if sentiment_data['net_sentiment'] >= 0 else ''
+        sentiment_text = f"【市场情绪】乐观{sentiment_data['positive_ratio']:.1%} 悲观{sentiment_data['negative_ratio']:.1%} 净值{sign}{sentiment_data['net_sentiment']:.3f}"
+        if sentiment_data['bullish_bias']:
+            sentiment_text += " 🚀强烈看涨"
+        elif sentiment_data['bearish_bias']:
+            sentiment_text += " ⚠️强烈看跌"
+        else:
+            sentiment_text += " ⚖️情绪中性"
+        # 添加社区活跃度信息
+        if sentiment_data.get('activity_text'):
+            sentiment_text += f"\n{sentiment_data['activity_text']}"
+    else:
+        sentiment_text = "【市场情绪】数据暂不可用"
+
+    print(sentiment_text)
+
     # 添加当前持仓信息
     current_pos = get_current_position()
     position_text = "无持仓" if not current_pos else f"{current_pos['side']}仓, 数量: {current_pos['size']}, 盈亏: {current_pos['unrealized_pnl']:.2f}USDT"
@@ -355,6 +478,8 @@ def analyze_with_deepseek(price_data):
     {technical_analysis}
 
     {signal_text}
+
+    {sentiment_text}  # 添加情绪分析
 
     【当前行情】
     - 当前价格: ${price_data['price']:,.2f}
@@ -533,7 +658,7 @@ def execute_trade(signal_data, price_data):
                     TRADE_CONFIG['symbol'],
                     'buy',
                     TRADE_CONFIG['amount'],
-                    params={'tag': 'f1ee03b510d5SUDE'}
+                    params={'tag': '60bb4a8d3416BCDE'}
                 )
             elif current_position and current_position['side'] == 'long':
                 print("已有多头持仓，保持现状")
@@ -544,7 +669,7 @@ def execute_trade(signal_data, price_data):
                     TRADE_CONFIG['symbol'],
                     'buy',
                     TRADE_CONFIG['amount'],
-                    params={'tag': 'f1ee03b510d5SUDE'}
+                    params={'tag': '60bb4a8d3416BCDE'}
                 )
 
         elif signal_data['signal'] == 'SELL':
@@ -555,7 +680,7 @@ def execute_trade(signal_data, price_data):
                     TRADE_CONFIG['symbol'],
                     'sell',
                     current_position['size'],
-                    params={'reduceOnly': True, 'tag': 'f1ee03b510d5SUDE'}
+                    params={'reduceOnly': True, 'tag': '60bb4a8d3416BCDE'}
                 )
                 time.sleep(1)
                 # 开空仓
@@ -563,7 +688,7 @@ def execute_trade(signal_data, price_data):
                     TRADE_CONFIG['symbol'],
                     'sell',
                     TRADE_CONFIG['amount'],
-                    params={'tag': 'f1ee03b510d5SUDE'}
+                    params={'tag': '60bb4a8d3416BCDE'}
                 )
             elif current_position and current_position['side'] == 'short':
                 print("已有空头持仓，保持现状")
@@ -574,7 +699,7 @@ def execute_trade(signal_data, price_data):
                     TRADE_CONFIG['symbol'],
                     'sell',
                     TRADE_CONFIG['amount'],
-                    params={'tag': 'f1ee03b510d5SUDE'}
+                    params={'tag': '60bb4a8d3416BCDE'}
                 )
 
         print("订单执行成功")
