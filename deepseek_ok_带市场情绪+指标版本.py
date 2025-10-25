@@ -227,25 +227,6 @@ def get_sentiment_indicators():
         return None
 
 
-# 测试
-result = get_sentiment_indicators()
-if result:
-    print("\n🎯 情绪指标结果:")
-    print(f"  乐观情绪: {result['positive_ratio']:.1%}")
-    print(f"  悲观情绪: {result['negative_ratio']:.1%}")
-    print(f"  情绪净值: {result['net_sentiment']:+.3f}")
-    print(f"  情绪强度: {result['sentiment_strength']:.1%}")
-    print(f"  看涨偏见: {result['bullish_bias']}")
-    print(f"  看跌偏见: {result['bearish_bias']}")
-    if result.get('community_activity') is not None:
-        print(f"  社区活跃度: {result['community_activity']:.0f}")
-    if result.get('activity_text'):
-        print(f"  {result['activity_text']}")
-    print(f"  数据状态: {result.get('data_status', '未知')}")
-else:
-    print("❌ 获取情绪指标失败")
-
-
 def get_market_trend(df):
     """判断市场趋势"""
     try:
@@ -733,7 +714,30 @@ def analyze_with_deepseek_with_retry(price_data, max_retries=2):
     return create_fallback_signal(price_data)
 
 
+def wait_for_next_period():
+    """等待到下一个15分钟整点"""
+    now = datetime.now()
+    current_minute = now.minute
+    current_second = now.second
+
+    # 计算到下一个15分钟整点的等待时间
+    remainder = current_minute % 15
+    if remainder == 0 and current_second < 10:  # 整点前10秒内立即执行
+        return 0
+
+    minutes_to_wait = 15 - remainder
+    seconds_to_wait = minutes_to_wait * 60 - current_second
+
+    print(f"🕒 等待 {minutes_to_wait} 分 {60 - current_second} 秒到整点...")
+    return seconds_to_wait
+
+
 def trading_bot():
+    # 等待到整点再执行
+    wait_seconds = wait_for_next_period()
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+
     """主交易机器人函数"""
     print("\n" + "=" * 60)
     print(f"执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -776,24 +780,14 @@ def main():
         print("交易所初始化失败，程序退出")
         return
 
-    # 根据时间周期设置执行频率
-    if TRADE_CONFIG['timeframe'] == '1h':
-        schedule.every().hour.at(":01").do(trading_bot)
-        print("执行频率: 每小时一次")
-    elif TRADE_CONFIG['timeframe'] == '15m':
-        schedule.every(15).minutes.do(trading_bot)
-        print("执行频率: 每15分钟一次")
-    else:
-        schedule.every().hour.at(":01").do(trading_bot)
-        print("执行频率: 每小时一次")
+    print("执行频率: 每15分钟整点执行")
 
-    # 立即执行一次
-    trading_bot()
-
-    # 循环执行
+    # 循环执行（不使用schedule）
     while True:
-        schedule.run_pending()
-        time.sleep(1)
+        trading_bot()  # 函数内部会自己等待整点
+
+        # 执行完后等待一段时间再检查（避免频繁循环）
+        time.sleep(60)  # 每分钟检查一次
 
 
 if __name__ == "__main__":
