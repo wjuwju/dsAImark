@@ -147,7 +147,7 @@ def get_sentiment_indicators():
     """获取情绪指标 - 修复空值问题版本"""
     try:
         API_URL = "https://service.cryptoracle.network/openapi/v2/endpoint"
-        API_KEY = "b54bcf4d-1bca-4e8e-9a24-22ff2c3d76d5"
+        API_KEY = "2b144650-4a16-4eb5-bbcd-70824577687b"
 
         # 获取最近4小时数据
         end_time = datetime.now()
