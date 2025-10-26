@@ -144,7 +144,7 @@ def get_support_resistance_levels(df, lookback=20):
 
 
 def get_sentiment_indicators():
-    """获取情绪指标 - 修复空值问题版本"""
+    """获取情绪指标 - 简洁版本"""
     try:
         API_URL = "https://service.cryptoracle.network/openapi/v2/endpoint"
         API_KEY = "2b144650-4a16-4eb5-bbcd-70824577687b"
@@ -155,7 +155,7 @@ def get_sentiment_indicators():
 
         request_body = {
             "apiKey": API_KEY,
-            "endpoints": ["CO-A-02-01", "CO-A-02-02", "CO-A-01-03"],
+            "endpoints": ["CO-A-02-01", "CO-A-02-02"],  # 只保留核心指标
             "startTime": start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "endTime": end_time.strftime("%Y-%m-%d %H:%M:%S"),
             "timeType": "15m",
@@ -170,13 +170,11 @@ def get_sentiment_indicators():
             if data.get("code") == 200 and data.get("data"):
                 time_periods = data["data"][0]["timePeriods"]
 
-                # 🔴 修复：查找第一个有有效数据的时间段（跳过空值）
+                # 查找第一个有有效数据的时间段
                 for period in time_periods:
                     period_data = period.get("data", [])
 
-                    # 检查这个时间段是否有有效数据
                     sentiment = {}
-                    community_activity = None
                     valid_data_found = False
 
                     for item in period_data:
@@ -184,36 +182,22 @@ def get_sentiment_indicators():
                         value = item.get("value", "").strip()
 
                         if value:  # 只处理非空值
-                            if endpoint in ["CO-A-02-01", "CO-A-02-02"]:
-                                try:
+                            try:
+                                if endpoint in ["CO-A-02-01", "CO-A-02-02"]:
                                     sentiment[endpoint] = float(value)
                                     valid_data_found = True
-                                except (ValueError, TypeError):
-                                    continue
-                            elif endpoint == "CO-A-01-03":
-                                try:
-                                    community_activity = float(value)
-                                except (ValueError, TypeError):
-                                    community_activity = None
+                            except (ValueError, TypeError):
+                                continue
 
-                    # 如果找到有效数据，就使用这个时间段
+                    # 如果找到有效数据
                     if valid_data_found and "CO-A-02-01" in sentiment and "CO-A-02-02" in sentiment:
                         positive = sentiment['CO-A-02-01']
                         negative = sentiment['CO-A-02-02']
                         net_sentiment = positive - negative
 
-                        # 🔴 修复：安全处理community_activity
-                        activity_text = ""
-                        if community_activity is not None:
-                            if community_activity > 0.7:
-                                activity_text = "🔥 社区活跃度极高"
-                            elif community_activity > 0.4:
-                                activity_text = "💹 社区活跃度中等"
-                            else:
-                                activity_text = "📉 社区活跃度较低"
-
-                        data_delay = (datetime.now() - datetime.strptime(period['startTime'],
-                                                                         '%Y-%m-%d %H:%M:%S')).seconds // 60
+                        # 正确的时间延迟计算
+                        data_delay = int((datetime.now() - datetime.strptime(
+                            period['startTime'], '%Y-%m-%d %H:%M:%S')).total_seconds() // 60)
 
                         print(f"✅ 使用情绪数据时间: {period['startTime']} (延迟: {data_delay}分钟)")
 
@@ -221,11 +205,6 @@ def get_sentiment_indicators():
                             'positive_ratio': positive,
                             'negative_ratio': negative,
                             'net_sentiment': net_sentiment,
-                            'sentiment_strength': abs(net_sentiment),
-                            'bullish_bias': net_sentiment > 0.1,
-                            'bearish_bias': net_sentiment < -0.1,
-                            'community_activity': community_activity,
-                            'activity_text': activity_text,  # 添加文本描述
                             'data_time': period['startTime'],
                             'data_delay_minutes': data_delay
                         }
@@ -441,21 +420,10 @@ def analyze_with_deepseek(price_data):
 
     # 获取情绪数据
     sentiment_data = get_sentiment_indicators()
-    # 修复：安全构建情绪文本
+    # 简化情绪文本 多了没用
     if sentiment_data:
         sign = '+' if sentiment_data['net_sentiment'] >= 0 else ''
         sentiment_text = f"【市场情绪】乐观{sentiment_data['positive_ratio']:.1%} 悲观{sentiment_data['negative_ratio']:.1%} 净值{sign}{sentiment_data['net_sentiment']:.3f}"
-
-        if sentiment_data['bullish_bias']:
-            sentiment_text += " 🚀强烈看涨"
-        elif sentiment_data['bearish_bias']:
-            sentiment_text += " ⚠️强烈看跌"
-        else:
-            sentiment_text += " ⚖️情绪中性"
-
-        # 安全添加社区活跃度信息
-        if sentiment_data.get('activity_text'):
-            sentiment_text += f"\n{sentiment_data['activity_text']}"
     else:
         sentiment_text = "【市场情绪】数据暂不可用"
 
