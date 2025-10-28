@@ -204,8 +204,13 @@ def get_btc_ohlcv_enhanced():
         # 获取技术分析数据
         print("📈 正在分析市场趋势...")
         trend_analysis = get_market_trend(df)
+        if not trend_analysis:
+            trend_analysis = {}
+            
         print("🎯 正在计算支撑阻力位...")
         levels_analysis = get_support_resistance_levels(df)
+        if not levels_analysis:
+            levels_analysis = {}
         
         print("✅ 技术分析完成")
         return {
@@ -341,6 +346,19 @@ def create_fallback_signal(price_data):
     }
 
 
+def safe_get_value(data, key, default=None):
+    """安全获取字典值，防止NoneType错误"""
+    try:
+        if data is None:
+            return default
+        if isinstance(data, dict):
+            return data.get(key, default)
+        return default
+    except Exception as e:
+        print(f"安全获取值失败: {e}")
+        return default
+
+
 def analyze_with_deepseek(price_data):
     """使用DeepSeek分析市场并生成交易信号（增强版）"""
 
@@ -354,16 +372,31 @@ def analyze_with_deepseek(price_data):
 
     # 构建K线数据文本
     kline_text = f"【最近5根{TRADE_CONFIG['timeframe']}K线数据】\n"
-    for i, kline in enumerate(price_data['kline_data'][-5:]):
-        trend = "阳线" if kline['close'] > kline['open'] else "阴线"
-        change = ((kline['close'] - kline['open']) / kline['open']) * 100
-        kline_text += f"K线{i + 1}: {trend} 开盘:{kline['open']:.2f} 收盘:{kline['close']:.2f} 涨跌:{change:+.2f}%\n"
+    
+    # 🔴 修复：检查 kline_data 是否存在且不为空
+    if 'kline_data' in price_data and price_data['kline_data'] is not None:
+        kline_data = price_data['kline_data']
+        if isinstance(kline_data, list) and len(kline_data) > 0:
+            for i, kline in enumerate(kline_data[-5:]):
+                if isinstance(kline, dict) and 'close' in kline and 'open' in kline:
+                    trend = "阳线" if kline['close'] > kline['open'] else "阴线"
+                    change = ((kline['close'] - kline['open']) / kline['open']) * 100
+                    kline_text += f"K线{i + 1}: {trend} 开盘:{kline['open']:.2f} 收盘:{kline['close']:.2f} 涨跌:{change:+.2f}%\n"
+                else:
+                    kline_text += f"K线{i + 1}: 数据格式错误\n"
+        else:
+            kline_text += "K线数据为空\n"
+    else:
+        kline_text += "K线数据不可用\n"
 
     # 添加上次交易信号
     signal_text = ""
-    if signal_history:
+    if signal_history and len(signal_history) > 0:
         last_signal = signal_history[-1]
-        signal_text = f"\n【上次交易信号】\n信号: {last_signal.get('signal', 'N/A')}\n信心: {last_signal.get('confidence', 'N/A')}"
+        if isinstance(last_signal, dict):
+            signal_text = f"\n【上次交易信号】\n信号: {last_signal.get('signal', 'N/A')}\n信心: {last_signal.get('confidence', 'N/A')}"
+        else:
+            signal_text = "\n【上次交易信号】\n数据格式错误"
 
     # 添加当前持仓信息
     current_pos = get_current_position()
@@ -437,7 +470,19 @@ def analyze_with_deepseek(price_data):
         )
 
         # 安全解析JSON
+        if not response or not hasattr(response, 'choices') or not response.choices or len(response.choices) == 0:
+            print("❌ DeepSeek API 响应为空或格式错误")
+            return create_fallback_signal(price_data)
+            
+        if not hasattr(response.choices[0], 'message') or not response.choices[0].message:
+            print("❌ DeepSeek API 响应消息为空")
+            return create_fallback_signal(price_data)
+            
         result = response.choices[0].message.content
+        if not result:
+            print("❌ DeepSeek API 响应内容为空")
+            return create_fallback_signal(price_data)
+            
         print(f"DeepSeek原始回复: {result}")
 
         # 提取JSON部分
@@ -471,14 +516,19 @@ def analyze_with_deepseek(price_data):
 
         # 信号连续性检查
         if len(signal_history) >= 3:
-            last_three = [s['signal'] for s in signal_history[-3:]]
-            if len(set(last_three)) == 1:
+            last_three = []
+            for s in signal_history[-3:]:
+                if isinstance(s, dict) and 'signal' in s:
+                    last_three.append(s['signal'])
+            if len(last_three) == 3 and len(set(last_three)) == 1:
                 print(f"⚠️ 注意：连续3次{signal_data['signal']}信号")
 
         return signal_data
 
     except Exception as e:
         print(f"DeepSeek分析失败: {e}")
+        import traceback
+        print(f"详细错误信息: {traceback.format_exc()}")
         return create_fallback_signal(price_data)
 
 
@@ -629,6 +679,8 @@ def analyze_with_deepseek_with_retry(price_data, max_retries=2):
 
         except Exception as e:
             print(f"第{attempt + 1}次尝试异常: {e}")
+            import traceback
+            print(f"详细错误信息: {traceback.format_exc()}")
             if attempt == max_retries - 1:
                 return create_fallback_signal(price_data)
             time.sleep(1)
