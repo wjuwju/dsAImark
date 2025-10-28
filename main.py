@@ -177,23 +177,37 @@ def get_market_trend(df):
 def get_btc_ohlcv_enhanced():
     """增强版：获取BTC K线数据并计算技术指标"""
     try:
+        print(f"🔍 正在获取 {TRADE_CONFIG['symbol']} 的K线数据...")
         # 获取K线数据
         ohlcv = exchange.fetch_ohlcv(TRADE_CONFIG['symbol'], TRADE_CONFIG['timeframe'],
                                      limit=TRADE_CONFIG['data_points'])
+        
+        if not ohlcv or len(ohlcv) == 0:
+            print("❌ 获取K线数据为空")
+            return None
+            
+        print(f"✅ 成功获取 {len(ohlcv)} 根K线数据")
 
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        print(f"📊 DataFrame形状: {df.shape}")
+        print(f"📊 最新价格: {df['close'].iloc[-1]:.2f}")
 
         # 计算技术指标
+        print("🔧 正在计算技术指标...")
         df = calculate_technical_indicators(df)
 
         current_data = df.iloc[-1]
         previous_data = df.iloc[-2]
 
         # 获取技术分析数据
+        print("📈 正在分析市场趋势...")
         trend_analysis = get_market_trend(df)
+        print("🎯 正在计算支撑阻力位...")
         levels_analysis = get_support_resistance_levels(df)
-
+        
+        print("✅ 技术分析完成")
         return {
             'price': current_data['close'],
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
