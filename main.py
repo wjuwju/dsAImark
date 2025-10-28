@@ -419,7 +419,7 @@ def analyze_with_deepseek(price_data):
     - 本K线成交量: {price_data['volume']:.2f} BTC
     - 价格变化: {price_data['price_change']:+.2f}%
     - 当前持仓: {position_text}
-    - 持仓盈亏: {current_pos['unrealized_pnl']:.2f if current_pos else 0} USDT
+    - 持仓盈亏: {(current_pos['unrealized_pnl'] if current_pos else 0):.2f} USDT
 
     【防频繁交易重要原则】
     1. **趋势持续性优先**: 不要因单根K线或短期波动改变整体趋势判断
