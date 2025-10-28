@@ -16,10 +16,11 @@ deepseek_client = OpenAI(
     base_url="https://api.deepseek.com"
 )
 
-exchange = ccxt.binance({
+exchange = ccxt.okx({
     'options': {'defaultType': 'future'},
-    'apiKey': os.getenv('BINANCE_API_KEY'),
-    'secret': os.getenv('BINANCE_SECRET'),
+    'apiKey': os.getenv('OKX_API_KEY'),
+    'secret': os.getenv('OKX_SECRET'),
+    'password': os.getenv('OKX_PASSWORD'),
 })
 
 # 交易参数配置
