@@ -8,8 +8,46 @@ from datetime import datetime
 import json
 import re
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
+
+# 配置日志系统
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+# 创建日志文件名（按日期）
+log_filename = os.path.join(log_dir, f"deepseek_chat_{datetime.now().strftime('%Y%m%d')}.log")
+
+# 配置日志格式
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_filename, encoding='utf-8'),
+        logging.StreamHandler()  # 同时输出到控制台
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+# 加载配置文件
+def load_config():
+    """加载配置文件"""
+    config_file = "config.json"
+    try:
+        if os.path.exists(config_file):
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                logger.info(f"已从 {config_file} 加载配置")
+                return config
+        else:
+            logger.warning(f"配置文件 {config_file} 不存在，使用默认配置")
+            return None
+    except Exception as e:
+        logger.error(f"加载配置文件失败: {e}，使用默认配置")
+        return None
 
 # 初始化DeepSeek客户端
 deepseek_client = OpenAI(
@@ -27,20 +65,27 @@ exchange = ccxt.okx({
     },
 })
 
-# 交易参数配置 - 结合两个版本的优点
-TRADE_CONFIG = {
-    'symbol': 'BTC/USDT:USDT',  # OKX的合约符号格式
-    'amount': 0.01,  # 交易数量 (BTC)
-    'leverage': 10,  # 杠杆倍数
-    'timeframe': '15m',  # 使用15分钟K线
-    'test_mode': False,  # 测试模式
-    'data_points': 96,  # 24小时数据（96根15分钟K线）
-    'analysis_periods': {
-        'short_term': 20,  # 短期均线
-        'medium_term': 50,  # 中期均线
-        'long_term': 96  # 长期趋势
+# 交易参数配置 - 优先从配置文件加载，否则使用默认配置
+config_from_file = load_config()
+if config_from_file:
+    TRADE_CONFIG = config_from_file
+else:
+    # 默认配置
+    TRADE_CONFIG = {
+        'symbol': 'BTC/USDT:USDT',  # OKX的合约符号格式
+        'amount': 0.01,  # 交易数量 (BTC)
+        'leverage': 10,  # 杠杆倍数
+        'timeframe': '15m',  # 使用15分钟K线
+        'test_mode': True,  # 测试模式
+        'data_points': 96,  # 24小时数据（96根15分钟K线）
+        'analysis_periods': {
+            'short_term': 20,  # 短期均线
+            'medium_term': 50,  # 中期均线
+            'long_term': 96  # 长期趋势
+        },
+        'execution_interval': 60,  # 执行间隔时间（秒），默认60秒
+        'retry_interval': 300  # 出错后重试间隔（秒），默认5分钟
     }
-}
 
 # 全局变量存储历史数据
 price_history = []
@@ -419,7 +464,7 @@ def analyze_with_deepseek(price_data):
     - 本K线成交量: {price_data['volume']:.2f} BTC
     - 价格变化: {price_data['price_change']:+.2f}%
     - 当前持仓: {position_text}
-    - 持仓盈亏: {current_pos['unrealized_pnl']:.2f if current_pos else 0} USDT
+    - 持仓盈亏: {(current_pos['unrealized_pnl'] if current_pos else 0):.2f} USDT
 
     【防频繁交易重要原则】
     1. **趋势持续性优先**: 不要因单根K线或短期波动改变整体趋势判断
@@ -458,11 +503,19 @@ def analyze_with_deepseek(price_data):
     """
 
     try:
+        # 记录发送给 DeepSeek 的提示词
+        system_message = f"您是一位专业的交易员，专注于{TRADE_CONFIG['timeframe']}周期趋势分析。请结合K线形态和技术指标做出判断，并严格遵循JSON格式要求。"
+        
+        logger.info("=" * 80)
+        logger.info("发送给 DeepSeek 的提示词:")
+        logger.info(f"系统消息: {system_message}")
+        logger.info(f"用户消息:\n{prompt}")
+        logger.info("=" * 80)
+        
         response = deepseek_client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system",
-                 "content": f"您是一位专业的交易员，专注于{TRADE_CONFIG['timeframe']}周期趋势分析。请结合K线形态和技术指标做出判断，并严格遵循JSON格式要求。"},
+                {"role": "system", "content": system_message},
                 {"role": "user", "content": prompt}
             ],
             stream=False,
@@ -471,18 +524,30 @@ def analyze_with_deepseek(price_data):
 
         # 安全解析JSON
         if not response or not hasattr(response, 'choices') or not response.choices or len(response.choices) == 0:
-            print("❌ DeepSeek API 响应为空或格式错误")
+            error_msg = "❌ DeepSeek API 响应为空或格式错误"
+            print(error_msg)
+            logger.error(error_msg)
             return create_fallback_signal(price_data)
             
         if not hasattr(response.choices[0], 'message') or not response.choices[0].message:
-            print("❌ DeepSeek API 响应消息为空")
+            error_msg = "❌ DeepSeek API 响应消息为空"
+            print(error_msg)
+            logger.error(error_msg)
             return create_fallback_signal(price_data)
             
         result = response.choices[0].message.content
         if not result:
-            print("❌ DeepSeek API 响应内容为空")
+            error_msg = "❌ DeepSeek API 响应内容为空"
+            print(error_msg)
+            logger.error(error_msg)
             return create_fallback_signal(price_data)
-            
+        
+        # 记录 DeepSeek 的响应
+        logger.info("=" * 80)
+        logger.info("DeepSeek 的响应:")
+        logger.info(result)
+        logger.info("=" * 80)
+        
         print(f"DeepSeek原始回复: {result}")
 
         # 提取JSON部分
@@ -740,11 +805,6 @@ def wait_with_progress(seconds):
 
 
 def trading_bot():
-    # 等待到整点再执行
-    wait_seconds = wait_for_next_period()
-    if wait_seconds > 0:
-        wait_with_progress(wait_seconds)
-
     """主交易机器人函数"""
     print("\n" + "=" * 60)
     print(f"执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -787,27 +847,28 @@ def main():
         print("交易所初始化失败，程序退出")
         return
 
-    print("执行频率: 每15分钟整点执行")
+    print(f"执行频率: 每 {TRADE_CONFIG['execution_interval']} 秒执行一次")
     print("=" * 60)
-    print("🚀 程序开始运行，等待整点执行交易分析...")
+    print("🚀 程序开始运行，开始执行交易分析...")
     print("=" * 60)
 
     # 循环执行（不使用schedule）
     try:
         while True:
             try:
-                trading_bot()  # 函数内部会自己等待整点
-                print(f"✅ 本次分析完成，等待下次执行...")
+                trading_bot()
+                print(f"✅ 本次分析完成，{TRADE_CONFIG['execution_interval']}秒后执行下次分析...")
             except Exception as e:
                 print(f"❌ 交易机器人执行异常: {e}")
                 import traceback
                 traceback.print_exc()
-                print(f"⏳ 5分钟后重试...")
-                time.sleep(300)  # 出错后等待5分钟再重试
+                print(f"⏳ {TRADE_CONFIG['retry_interval']}秒后重试...")
+                time.sleep(TRADE_CONFIG['retry_interval'])  # 出错后等待配置的重试间隔
+                continue
             
-            # 执行完后等待一段时间再检查（避免频繁循环）
-            print(f"🔄 等待下次执行，程序保持运行...")
-            time.sleep(60)  # 每分钟检查一次
+            # 执行完后等待配置的时间再执行下一次
+            print(f"🔄 等待 {TRADE_CONFIG['execution_interval']} 秒...")
+            time.sleep(TRADE_CONFIG['execution_interval'])
             
     except KeyboardInterrupt:
         print("\n⚠️ 程序被手动停止")

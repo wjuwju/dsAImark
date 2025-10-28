@@ -1,0 +1,16 @@
+{
+  "symbol": "BTC/USDT:USDT",
+  "amount": 0.01,
+  "leverage": 10,
+  "timeframe": "15m",
+  "test_mode": true,
+  "data_points": 96,
+  "analysis_periods": {
+    "short_term": 20,
+    "medium_term": 50,
+    "long_term": 96
+  },
+  "execution_interval": 60,
+  "retry_interval": 300,
+  "comment": "execution_interval: 执行间隔时间（秒），retry_interval: 出错后重试间隔（秒）"
+}
