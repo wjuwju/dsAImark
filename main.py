@@ -671,17 +671,19 @@ def wait_with_progress(seconds):
     """带进度显示的等待函数，保持容器活跃"""
     elapsed = 0
     while elapsed < seconds:
-        # 每30秒输出一次进度，保持容器活跃
-        time.sleep(30)
-        elapsed += 30
+        # 每10秒输出一次进度，保持容器活跃
+        time.sleep(10)
+        elapsed += 10
         remaining = max(0, seconds - elapsed)
         if remaining > 0:
             mins = int(remaining // 60)
             secs = int(remaining % 60)
-            if elapsed % 60 == 0:  # 每分钟输出一次详细信息
-                print(f"⏱️  已等待 {elapsed//60} 分钟，还需等待 {mins} 分 {secs} 秒...")
+            print(f"⏱️  已等待 {elapsed//60} 分钟，还需等待 {mins} 分 {secs} 秒...")
+            # 每30秒输出一次心跳，确保Railway知道程序还在运行
+            if elapsed % 30 == 0:
+                print(f"💓 程序运行正常，等待整点执行交易分析...")
     
-    if remaining > 0 and remaining <= 30:
+    if remaining > 0 and remaining <= 10:
         time.sleep(remaining)  # 等待剩余时间
 
 
@@ -752,6 +754,7 @@ def main():
                 time.sleep(300)  # 出错后等待5分钟再重试
             
             # 执行完后等待一段时间再检查（避免频繁循环）
+            print(f"🔄 等待下次执行，程序保持运行...")
             time.sleep(60)  # 每分钟检查一次
             
     except KeyboardInterrupt:
