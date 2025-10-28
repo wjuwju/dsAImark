@@ -241,7 +241,7 @@ def get_btc_ohlcv_enhanced():
 
 def generate_technical_analysis_text(price_data):
     """生成技术分析文本"""
-    if 'technical_data' not in price_data:
+    if not price_data or 'technical_data' not in price_data:
         return "技术指标数据不可用"
 
     tech = price_data['technical_data']
@@ -327,6 +327,10 @@ def safe_json_parse(json_str):
 
 def create_fallback_signal(price_data):
     """创建备用交易信号"""
+    # 🔴 修复：处理 price_data 为空的情况
+    if not price_data or not isinstance(price_data, dict):
+        price_data = {'price': 0}
+    
     return {
         "signal": "HOLD",
         "reason": "因技术分析暂时不可用，采取保守策略",
@@ -339,6 +343,11 @@ def create_fallback_signal(price_data):
 
 def analyze_with_deepseek(price_data):
     """使用DeepSeek分析市场并生成交易信号（增强版）"""
+
+    # 🔴 修复：添加空值检查
+    if not price_data or not isinstance(price_data, dict):
+        print("❌ price_data 为空或无效，使用备用信号")
+        return create_fallback_signal({'price': 0})
 
     # 生成技术分析文本
     technical_analysis = generate_technical_analysis_text(price_data)
@@ -603,6 +612,12 @@ def execute_trade(signal_data, price_data):
 
 def analyze_with_deepseek_with_retry(price_data, max_retries=2):
     """带重试的DeepSeek分析"""
+    
+    # 🔴 修复：添加空值检查
+    if not price_data or not isinstance(price_data, dict):
+        print("❌ price_data 为空或无效，使用备用信号")
+        return create_fallback_signal({'price': 0})
+    
     for attempt in range(max_retries):
         try:
             signal_data = analyze_with_deepseek(price_data)
