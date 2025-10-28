@@ -667,11 +667,29 @@ def wait_for_next_period():
     return seconds_to_wait
 
 
+def wait_with_progress(seconds):
+    """带进度显示的等待函数，保持容器活跃"""
+    elapsed = 0
+    while elapsed < seconds:
+        # 每30秒输出一次进度，保持容器活跃
+        time.sleep(30)
+        elapsed += 30
+        remaining = max(0, seconds - elapsed)
+        if remaining > 0:
+            mins = int(remaining // 60)
+            secs = int(remaining % 60)
+            if elapsed % 60 == 0:  # 每分钟输出一次详细信息
+                print(f"⏱️  已等待 {elapsed//60} 分钟，还需等待 {mins} 分 {secs} 秒...")
+    
+    if remaining > 0 and remaining <= 30:
+        time.sleep(remaining)  # 等待剩余时间
+
+
 def trading_bot():
     # 等待到整点再执行
     wait_seconds = wait_for_next_period()
     if wait_seconds > 0:
-        time.sleep(wait_seconds)
+        wait_with_progress(wait_seconds)
 
     """主交易机器人函数"""
     print("\n" + "=" * 60)
@@ -716,13 +734,32 @@ def main():
         return
 
     print("执行频率: 每15分钟整点执行")
+    print("=" * 60)
+    print("🚀 程序开始运行，等待整点执行交易分析...")
+    print("=" * 60)
 
     # 循环执行（不使用schedule）
-    while True:
-        trading_bot()  # 函数内部会自己等待整点
-
-        # 执行完后等待一段时间再检查（避免频繁循环）
-        time.sleep(60)  # 每分钟检查一次
+    try:
+        while True:
+            try:
+                trading_bot()  # 函数内部会自己等待整点
+                print(f"✅ 本次分析完成，等待下次执行...")
+            except Exception as e:
+                print(f"❌ 交易机器人执行异常: {e}")
+                import traceback
+                traceback.print_exc()
+                print(f"⏳ 5分钟后重试...")
+                time.sleep(300)  # 出错后等待5分钟再重试
+            
+            # 执行完后等待一段时间再检查（避免频繁循环）
+            time.sleep(60)  # 每分钟检查一次
+            
+    except KeyboardInterrupt:
+        print("\n⚠️ 程序被手动停止")
+    except Exception as e:
+        print(f"\n❌ 程序异常退出: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
