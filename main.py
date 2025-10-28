@@ -19,12 +19,12 @@ deepseek_client = OpenAI(
 
 # 初始化OKX交易所
 exchange = ccxt.okx({
-    'options': {
-        'defaultType': 'swap',  # OKX使用swap表示永续合约
-    },
     'apiKey': os.getenv('OKX_API_KEY'),
     'secret': os.getenv('OKX_SECRET'),
     'password': os.getenv('OKX_PASSWORD'),  # OKX需要交易密码
+    'options': {
+        'defaultType': 'swap',  # OKX使用swap表示永续合约
+    },
 })
 
 # 交易参数配置 - 结合两个版本的优点
@@ -51,11 +51,10 @@ position = None
 def setup_exchange():
     """设置交易所参数"""
     try:
-        # OKX设置杠杆
+        # OKX设置杠杆（OKX不需要额外的mgnMode参数）
         exchange.set_leverage(
             TRADE_CONFIG['leverage'],
-            TRADE_CONFIG['symbol'],
-            {'mgnMode': 'cross'}  # 全仓模式
+            TRADE_CONFIG['symbol']
         )
         print(f"设置杠杆倍数: {TRADE_CONFIG['leverage']}x")
 
