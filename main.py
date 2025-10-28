@@ -201,6 +201,15 @@ def analyze_with_deepseek(price_data):
     }}
     """
 
+    print("=" * 80)
+    print("🤖 发送给 DeepSeek 的完整 Prompt:")
+    print("=" * 80)
+    print("System Message:")
+    print(f"您是一位急需资金为母亲治疗癌症的交易员，你现在需要从加密货币交易市场赚取足够的金额治疗你的母亲，专注于{TRADE_CONFIG['timeframe']}周期趋势分析。请结合K线形态和技术指标做出判断。")
+    print("\nUser Message:")
+    print(prompt)
+    print("=" * 80)
+
     try:
         response = deepseek_client.chat.completions.create(
             model="deepseek-chat",
