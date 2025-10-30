@@ -55,13 +55,20 @@ deepseek_client = OpenAI(
     base_url="https://api.deepseek.com"
 )
 
-# 初始化OKX交易所
+# 初始化OKX交易所（用于交易）
 exchange = ccxt.okx({
     'apiKey': os.getenv('OKX_API_KEY'),
     'secret': os.getenv('OKX_SECRET'),
     'password': os.getenv('OKX_PASSWORD'),  # OKX需要交易密码
     'options': {
         'defaultType': 'swap',  # OKX使用swap表示永续合约
+    },
+})
+
+# 创建一个不带认证的公开 exchange 实例（用于获取市场数据）
+exchange_public = ccxt.okx({
+    'options': {
+        'defaultType': 'swap',
     },
 })
 
@@ -78,6 +85,7 @@ else:
         'timeframe': '15m',  # 使用15分钟K线
         'test_mode': True,  # 测试模式
         'data_points': 96,  # 24小时数据（96根15分钟K线）
+        'kline_display_count': 5,  # 显示的K线数量，默认5根
         'analysis_periods': {
             'short_term': 20,  # 短期均线
             'medium_term': 50,  # 中期均线
@@ -87,30 +95,71 @@ else:
         'retry_interval': 300  # 出错后重试间隔（秒），默认5分钟
     }
 
+# 说明：不使用 OKX 模拟盘标记
+# OKX 的模拟盘 API 功能严重受限，几乎所有接口都不可用
+# 改为使用实盘 API 读取数据，通过 test_mode 控制是否实际下单
+if TRADE_CONFIG.get('test_mode', True):
+    logger.info("测试模式：只分析不下单")
+    if TRADE_CONFIG.get('virtual_mode', False):
+        print(f"✅ 虚拟仓位模式：使用虚拟金额 ${TRADE_CONFIG.get('virtual_balance', 10000):,.2f} 进行模拟交易")
+    else:
+        print("✅ 测试模式：程序会分析市场并生成信号，但不会实际下单")
+else:
+    logger.warning("⚠️ 实盘模式：程序会真实下单，请谨慎！")
+    print("⚠️ 实盘模式：程序会真实下单，请谨慎！")
+
 # 全局变量存储历史数据
 price_history = []
 signal_history = []
 position = None
 
+# 虚拟仓位管理
+virtual_position = None
+virtual_balance = TRADE_CONFIG.get('virtual_balance', 10000)
+virtual_initial_balance = virtual_balance  # 记录初始金额用于计算总收益
+
 
 def setup_exchange():
     """设置交易所参数"""
     try:
-        # OKX设置杠杆（OKX不需要额外的mgnMode参数）
-        exchange.set_leverage(
-            TRADE_CONFIG['leverage'],
-            TRADE_CONFIG['symbol']
-        )
-        print(f"设置杠杆倍数: {TRADE_CONFIG['leverage']}x")
+        # 在实盘模式下设置杠杆
+        if not TRADE_CONFIG.get('test_mode', True):
+            exchange.set_leverage(
+                TRADE_CONFIG['leverage'],
+                TRADE_CONFIG['symbol']
+            )
+            print(f"设置杠杆倍数: {TRADE_CONFIG['leverage']}x")
+            logger.info(f"设置杠杆倍数: {TRADE_CONFIG['leverage']}x")
+        else:
+            print(f"测试模式：跳过杠杆设置")
+            logger.info(f"测试模式：跳过杠杆设置")
 
         # 获取余额
-        balance = exchange.fetch_balance()
-        usdt_balance = balance['USDT']['free']
-        print(f"当前USDT余额: {usdt_balance:.2f}")
+        try:
+            balance = exchange.fetch_balance()
+            usdt_balance = balance.get('USDT', {}).get('free', 0)
+            print(f"当前USDT余额: {usdt_balance:.2f}")
+            logger.info(f"当前USDT余额: {usdt_balance:.2f}")
+        except Exception as e:
+            logger.warning(f"获取余额失败: {e}")
+            if TRADE_CONFIG.get('test_mode', True):
+                print(f"测试模式：跳过余额查询")
+            else:
+                raise
 
         return True
     except Exception as e:
-        print(f"交易所设置失败: {e}")
+        error_msg = f"交易所设置失败: {e}"
+        print(error_msg)
+        logger.error(error_msg)
+        
+        # 测试模式下即使失败也继续运行
+        if TRADE_CONFIG.get('test_mode', True):
+            warning_msg = "⚠️ 测试模式：部分初始化失败，但继续运行"
+            print(warning_msg)
+            logger.warning(warning_msg)
+            return True
+        
         return False
 
 
@@ -223,8 +272,8 @@ def get_btc_ohlcv_enhanced():
     """增强版：获取BTC K线数据并计算技术指标"""
     try:
         print(f"🔍 正在获取 {TRADE_CONFIG['symbol']} 的K线数据...")
-        # 获取K线数据
-        ohlcv = exchange.fetch_ohlcv(TRADE_CONFIG['symbol'], TRADE_CONFIG['timeframe'],
+        # 使用公开 API 获取K线数据（不需要认证，不受模拟盘限制）
+        ohlcv = exchange_public.fetch_ohlcv(TRADE_CONFIG['symbol'], TRADE_CONFIG['timeframe'],
                                      limit=TRADE_CONFIG['data_points'])
         
         if not ohlcv or len(ohlcv) == 0:
@@ -330,7 +379,13 @@ def generate_technical_analysis_text(price_data):
 
 
 def get_current_position():
-    """获取当前持仓情况 - OKX版本"""
+    """获取当前持仓情况 - OKX版本（支持虚拟仓位）"""
+    global virtual_position
+    
+    # 如果启用虚拟仓位模式
+    if TRADE_CONFIG.get('test_mode', True) and TRADE_CONFIG.get('virtual_mode', False):
+        return virtual_position
+    
     try:
         positions = exchange.fetch_positions([TRADE_CONFIG['symbol']])
 
@@ -415,14 +470,18 @@ def analyze_with_deepseek(price_data):
     # 生成技术分析文本
     technical_analysis = generate_technical_analysis_text(price_data)
 
+    # 获取K线显示数量配置（默认5根）
+    kline_count = TRADE_CONFIG.get('kline_display_count', 5)
+    
     # 构建K线数据文本
-    kline_text = f"【最近5根{TRADE_CONFIG['timeframe']}K线数据】\n"
+    kline_text = f"【最近{kline_count}根{TRADE_CONFIG['timeframe']}K线数据】\n"
     
     # 🔴 修复：检查 kline_data 是否存在且不为空
     if 'kline_data' in price_data and price_data['kline_data'] is not None:
         kline_data = price_data['kline_data']
         if isinstance(kline_data, list) and len(kline_data) > 0:
-            for i, kline in enumerate(kline_data[-5:]):
+            # 使用配置的数量，取最后 kline_count 根K线
+            for i, kline in enumerate(kline_data[-kline_count:]):
                 if isinstance(kline, dict) and 'close' in kline and 'open' in kline:
                     trend = "阳线" if kline['close'] > kline['open'] else "阴线"
                     change = ((kline['close'] - kline['open']) / kline['open']) * 100
@@ -505,13 +564,6 @@ def analyze_with_deepseek(price_data):
     try:
         # 记录发送给 DeepSeek 的提示词
         system_message = f"您是一位专业的交易员，专注于{TRADE_CONFIG['timeframe']}周期趋势分析。请结合K线形态和技术指标做出判断，并严格遵循JSON格式要求。"
-        
-        logger.info("=" * 80)
-        logger.info("发送给 DeepSeek 的提示词:")
-        logger.info(f"系统消息: {system_message}")
-        logger.info(f"用户消息:\n{prompt}")
-        logger.info("=" * 80)
-        
         response = deepseek_client.chat.completions.create(
             model="deepseek-chat",
             messages=[
@@ -574,10 +626,23 @@ def analyze_with_deepseek(price_data):
         if len(signal_history) > 30:
             signal_history.pop(0)
 
+        # 记录解析后的交易信号
+        logger.info("=" * 80)
+        logger.info("解析后的交易信号:")
+        logger.info(f"信号: {signal_data['signal']}")
+        logger.info(f"理由: {signal_data['reason']}")
+        logger.info(f"止损: ${signal_data['stop_loss']:,.2f}")
+        logger.info(f"止盈: ${signal_data['take_profit']:,.2f}")
+        logger.info(f"信心程度: {signal_data['confidence']}")
+        logger.info(f"时间戳: {signal_data['timestamp']}")
+        logger.info("=" * 80)
+
         # 信号统计
         signal_count = len([s for s in signal_history if s.get('signal') == signal_data['signal']])
         total_signals = len(signal_history)
-        print(f"信号统计: {signal_data['signal']} (最近{total_signals}次中出现{signal_count}次)")
+        stats_msg = f"信号统计: {signal_data['signal']} (最近{total_signals}次中出现{signal_count}次)"
+        print(stats_msg)
+        logger.info(stats_msg)
 
         # 信号连续性检查
         if len(signal_history) >= 3:
@@ -586,22 +651,38 @@ def analyze_with_deepseek(price_data):
                 if isinstance(s, dict) and 'signal' in s:
                     last_three.append(s['signal'])
             if len(last_three) == 3 and len(set(last_three)) == 1:
-                print(f"⚠️ 注意：连续3次{signal_data['signal']}信号")
+                warning_msg = f"⚠️ 注意：连续3次{signal_data['signal']}信号"
+                print(warning_msg)
+                logger.warning(warning_msg)
 
         return signal_data
 
     except Exception as e:
-        print(f"DeepSeek分析失败: {e}")
+        error_msg = f"DeepSeek分析失败: {e}"
+        print(error_msg)
+        logger.error(error_msg)
         import traceback
-        print(f"详细错误信息: {traceback.format_exc()}")
+        traceback_str = traceback.format_exc()
+        print(f"详细错误信息: {traceback_str}")
+        logger.error(f"详细错误信息: {traceback_str}")
         return create_fallback_signal(price_data)
 
 
 def execute_trade(signal_data, price_data):
-    """执行交易 - OKX版本（修复保证金检查）"""
-    global position
+    """执行交易 - OKX版本（修复保证金检查，支持虚拟仓位）"""
+    global position, virtual_position, virtual_balance
 
     current_position = get_current_position()
+
+    # 记录交易决策
+    logger.info("=" * 80)
+    logger.info("交易决策分析:")
+    logger.info(f"信号: {signal_data['signal']}")
+    logger.info(f"信心程度: {signal_data['confidence']}")
+    logger.info(f"理由: {signal_data['reason']}")
+    logger.info(f"止损: ${signal_data['stop_loss']:,.2f}")
+    logger.info(f"止盈: ${signal_data['take_profit']:,.2f}")
+    logger.info(f"当前持仓: {current_position}")
 
     # 🔴 紧急修复：防止频繁反转
     if current_position and signal_data['signal'] != 'HOLD':
@@ -617,14 +698,20 @@ def execute_trade(signal_data, price_data):
         # 如果只是方向反转，需要高信心才执行
         if new_side != current_side:
             if signal_data['confidence'] != 'HIGH':
-                print(f"🔒 非高信心反转信号，保持现有{current_side}仓")
+                msg = f"🔒 非高信心反转信号，保持现有{current_side}仓"
+                print(msg)
+                logger.info(msg)
+                logger.info("=" * 80)
                 return
 
             # 检查最近信号历史，避免频繁反转
             if len(signal_history) >= 2:
                 last_signals = [s['signal'] for s in signal_history[-2:]]
                 if signal_data['signal'] in last_signals:
-                    print(f"🔒 近期已出现{signal_data['signal']}信号，避免频繁反转")
+                    msg = f"🔒 近期已出现{signal_data['signal']}信号，避免频繁反转"
+                    print(msg)
+                    logger.info(msg)
+                    logger.info("=" * 80)
                     return
 
     print(f"交易信号: {signal_data['signal']}")
@@ -636,11 +723,23 @@ def execute_trade(signal_data, price_data):
 
     # 风险管理：低信心信号不执行
     if signal_data['confidence'] == 'LOW' and not TRADE_CONFIG['test_mode']:
-        print("⚠️ 低信心信号，跳过执行")
+        msg = "⚠️ 低信心信号，跳过执行"
+        print(msg)
+        logger.info(msg)
+        logger.info("=" * 80)
+        return
+
+    # 虚拟仓位模式
+    if TRADE_CONFIG['test_mode'] and TRADE_CONFIG.get('virtual_mode', False):
+        execute_virtual_trade(signal_data, price_data)
+        logger.info("=" * 80)
         return
 
     if TRADE_CONFIG['test_mode']:
-        print("测试模式 - 仅模拟交易")
+        msg = "测试模式 - 仅模拟交易"
+        print(msg)
+        logger.info(msg)
+        logger.info("=" * 80)
         return
 
     try:
@@ -723,6 +822,150 @@ def execute_trade(signal_data, price_data):
         print(f"订单执行失败: {e}")
         import traceback
         traceback.print_exc()
+
+
+def execute_virtual_trade(signal_data, price_data):
+    """执行虚拟交易"""
+    global virtual_position, virtual_balance
+    
+    current_price = price_data['price']
+    
+    msg_list = []
+    msg_list.append("\n" + "=" * 60)
+    msg_list.append("💰 虚拟仓位交易执行")
+    msg_list.append("=" * 60)
+    
+    # HOLD 信号：保持现有持仓，只更新未实现盈亏
+    if signal_data['signal'] == 'HOLD':
+        if virtual_position:
+            # 计算未实现盈亏
+            if virtual_position['side'] == 'long':
+                unrealized = (current_price - virtual_position['entry_price']) * virtual_position['size']
+            else:
+                unrealized = (virtual_position['entry_price'] - current_price) * virtual_position['size']
+            
+            virtual_position['unrealized_pnl'] = unrealized
+            unrealized_percent = (unrealized / (virtual_position['entry_price'] * virtual_position['size'] / TRADE_CONFIG['leverage'])) * 100
+            
+            msg_list.append(f"保持 {virtual_position['side'].upper()} 仓位 (HOLD):")
+            msg_list.append(f"  - 开仓价格: ${virtual_position['entry_price']:,.2f}")
+            msg_list.append(f"  - 当前价格: ${current_price:,.2f}")
+            msg_list.append(f"  - 仓位大小: {virtual_position['size']:.6f} BTC")
+            msg_list.append(f"  - 未实现盈亏: ${unrealized:+,.2f} ({unrealized_percent:+.2f}%)")
+            
+            logger.info(f"虚拟持仓 - {virtual_position['side'].upper()} | 未实现盈亏: ${unrealized:+,.2f} ({unrealized_percent:+.2f}%)")
+        else:
+            msg_list.append("保持当前状态 (HOLD) - 无持仓")
+            logger.info("虚拟交易 - HOLD (无持仓)")
+    
+    # BUY/SELL 信号：需要调整仓位
+    else:
+        # 计算新仓位大小（基于虚拟余额）
+        position_value = virtual_balance * 0.95  # 使用95%的余额
+        position_size = position_value / current_price * TRADE_CONFIG['leverage']
+        
+        # 如果有持仓且方向不同，先平仓
+        if virtual_position:
+            current_side = virtual_position['side']
+            new_side = 'long' if signal_data['signal'] == 'BUY' else 'short'
+            
+            # 只有在方向改变时才平仓
+            if current_side != new_side:
+                # 计算盈亏
+                if virtual_position['side'] == 'long':
+                    pnl = (current_price - virtual_position['entry_price']) * virtual_position['size']
+                else:  # short
+                    pnl = (virtual_position['entry_price'] - current_price) * virtual_position['size']
+                
+                pnl_percent = (pnl / (virtual_position['entry_price'] * virtual_position['size'] / TRADE_CONFIG['leverage'])) * 100
+                
+                # 更新余额
+                virtual_balance += pnl
+                
+                msg_list.append(f"平仓 {virtual_position['side'].upper()} 仓位:")
+                msg_list.append(f"  - 开仓价格: ${virtual_position['entry_price']:,.2f}")
+                msg_list.append(f"  - 平仓价格: ${current_price:,.2f}")
+                msg_list.append(f"  - 仓位大小: {virtual_position['size']:.6f} BTC")
+                msg_list.append(f"  - 盈亏: ${pnl:+,.2f} ({pnl_percent:+.2f}%)")
+                msg_list.append(f"  - 更新后余额: ${virtual_balance:,.2f}")
+                
+                logger.info(f"虚拟平仓 - {virtual_position['side'].upper()} | 盈亏: ${pnl:+,.2f} ({pnl_percent:+.2f}%) | 余额: ${virtual_balance:,.2f}")
+                
+                virtual_position = None
+                
+                # 重新计算仓位大小（余额可能变化）
+                position_value = virtual_balance * 0.95
+                position_size = position_value / current_price * TRADE_CONFIG['leverage']
+            else:
+                # 方向相同，保持现有持仓
+                msg_list.append(f"已有 {current_side.upper()} 持仓，保持现状")
+                logger.info(f"虚拟交易 - 已有{current_side}仓，保持不变")
+        
+        # 执行新开仓（只有在无持仓或平仓后才开新仓）
+        if virtual_position is None:
+            if signal_data['signal'] == 'BUY':
+                virtual_position = {
+                    'side': 'long',
+                    'entry_price': current_price,
+                    'size': position_size,
+                    'leverage': TRADE_CONFIG['leverage'],
+                    'symbol': TRADE_CONFIG['symbol'],
+                    'unrealized_pnl': 0
+                }
+                msg_list.append(f"\n开多仓:")
+                msg_list.append(f"  - 开仓价格: ${current_price:,.2f}")
+                msg_list.append(f"  - 仓位大小: {position_size:.6f} BTC")
+                msg_list.append(f"  - 杠杆倍数: {TRADE_CONFIG['leverage']}x")
+                msg_list.append(f"  - 保证金: ${position_value / TRADE_CONFIG['leverage']:,.2f}")
+                
+                logger.info(f"虚拟开多 - 价格: ${current_price:,.2f} | 大小: {position_size:.6f} BTC")
+                
+            elif signal_data['signal'] == 'SELL':
+                virtual_position = {
+                    'side': 'short',
+                    'entry_price': current_price,
+                    'size': position_size,
+                    'leverage': TRADE_CONFIG['leverage'],
+                    'symbol': TRADE_CONFIG['symbol'],
+                    'unrealized_pnl': 0
+                }
+                msg_list.append(f"\n开空仓:")
+                msg_list.append(f"  - 开仓价格: ${current_price:,.2f}")
+                msg_list.append(f"  - 仓位大小: {position_size:.6f} BTC")
+                msg_list.append(f"  - 杠杆倍数: {TRADE_CONFIG['leverage']}x")
+                msg_list.append(f"  - 保证金: ${position_value / TRADE_CONFIG['leverage']:,.2f}")
+                
+                logger.info(f"虚拟开空 - 价格: ${current_price:,.2f} | 大小: {position_size:.6f} BTC")
+    
+    # 显示当前统计
+    total_pnl = virtual_balance - virtual_initial_balance
+    total_pnl_percent = (total_pnl / virtual_initial_balance) * 100
+    
+    msg_list.append(f"\n📊 账户统计:")
+    msg_list.append(f"  - 初始余额: ${virtual_initial_balance:,.2f}")
+    msg_list.append(f"  - 当前余额: ${virtual_balance:,.2f}")
+    msg_list.append(f"  - 总盈亏: ${total_pnl:+,.2f} ({total_pnl_percent:+.2f}%)")
+    
+    if virtual_position:
+        # 计算当前未实现盈亏
+        if virtual_position['side'] == 'long':
+            unrealized = (current_price - virtual_position['entry_price']) * virtual_position['size']
+        else:
+            unrealized = (virtual_position['entry_price'] - current_price) * virtual_position['size']
+        
+        virtual_position['unrealized_pnl'] = unrealized
+        unrealized_percent = (unrealized / (virtual_position['entry_price'] * virtual_position['size'] / TRADE_CONFIG['leverage'])) * 100
+        
+        msg_list.append(f"  - 持仓盈亏: ${unrealized:+,.2f} ({unrealized_percent:+.2f}%)")
+        msg_list.append(f"  - 总资产: ${virtual_balance + unrealized:,.2f}")
+    
+    msg_list.append("=" * 60)
+    
+    # 输出所有消息
+    for msg in msg_list:
+        print(msg)
+    
+    logger.info(f"虚拟账户 - 余额: ${virtual_balance:,.2f} | 总盈亏: ${total_pnl:+,.2f} ({total_pnl_percent:+.2f}%)")
 
 
 def analyze_with_deepseek_with_retry(price_data, max_retries=2):
@@ -835,7 +1078,11 @@ def main():
     print("融合技术指标策略 + OKX实盘接口")
 
     if TRADE_CONFIG['test_mode']:
-        print("当前为模拟模式，不会真实下单")
+        if TRADE_CONFIG.get('virtual_mode', False):
+            print(f"💰 虚拟仓位模式 - 初始金额: ${TRADE_CONFIG.get('virtual_balance', 10000):,.2f}")
+            print(f"   使用虚拟资金进行模拟交易，跟踪盈亏")
+        else:
+            print("当前为模拟模式，不会真实下单")
     else:
         print("实盘交易模式，请谨慎操作！")
 
@@ -872,6 +1119,18 @@ def main():
             
     except KeyboardInterrupt:
         print("\n⚠️ 程序被手动停止")
+        if TRADE_CONFIG.get('virtual_mode', False):
+            print("\n" + "=" * 60)
+            print("💰 虚拟交易最终统计")
+            print("=" * 60)
+            print(f"初始金额: ${virtual_initial_balance:,.2f}")
+            print(f"最终余额: ${virtual_balance:,.2f}")
+            total_pnl = virtual_balance - virtual_initial_balance
+            total_pnl_percent = (total_pnl / virtual_initial_balance) * 100
+            print(f"总盈亏: ${total_pnl:+,.2f} ({total_pnl_percent:+.2f}%)")
+            if virtual_position:
+                print(f"持仓: {virtual_position['side'].upper()} {virtual_position['size']:.6f} BTC")
+            print("=" * 60)
     except Exception as e:
         print(f"\n❌ 程序异常退出: {e}")
         import traceback

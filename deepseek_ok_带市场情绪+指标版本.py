@@ -42,7 +42,7 @@ TRADE_CONFIG = {
     },
     # 新增智能仓位参数
     'position_management': {
-        'enable_intelligent_position': True,  # 🆕 新增：是否启用智能仓位管理
+        'enable_intelligent_position': False,  # 🆕 新增：是否启用智能仓位管理
         'base_usdt_amount': 100,  # USDT投入下单基数
         'high_confidence_multiplier': 1.5,
         'medium_confidence_multiplier': 1.0,

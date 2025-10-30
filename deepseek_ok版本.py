@@ -48,7 +48,7 @@ def setup_exchange():
         exchange.set_leverage(
             TRADE_CONFIG['leverage'],
             TRADE_CONFIG['symbol'],
-            {'mgnMode': 'cross'}  # 全仓模式，也可用'isolated'逐仓
+            {'mgnMode': 'isolated'}  # 全仓模式，也可用'isolated'逐仓
         )
         print(f"设置杠杆倍数: {TRADE_CONFIG['leverage']}x")
 

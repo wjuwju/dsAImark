@@ -1,16 +1,19 @@
 {
-  "symbol": "BTC/USDT:USDT",
+  "symbol": "ETH/USDT:USDT",
   "amount": 0.01,
   "leverage": 10,
   "timeframe": "15m",
   "test_mode": true,
+  "virtual_mode": true,
+  "virtual_balance": 10000,
   "data_points": 96,
+  "kline_display_count": 10,
   "analysis_periods": {
     "short_term": 20,
     "medium_term": 50,
     "long_term": 96
   },
-  "execution_interval": 60,
+  "execution_interval": 900,
   "retry_interval": 300,
-  "comment": "execution_interval: 执行间隔时间（秒），retry_interval: 出错后重试间隔（秒）"
+  "comment": "execution_interval: 执行间隔时间（秒），retry_interval: 出错后重试间隔（秒），kline_display_count: 显示的K线数量，virtual_mode: 启用虚拟仓位模式，virtual_balance: 虚拟账户初始金额（美元）"
 }
