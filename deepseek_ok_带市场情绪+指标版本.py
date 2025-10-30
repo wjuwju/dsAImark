@@ -32,7 +32,7 @@ exchange = ccxt.okx({
 TRADE_CONFIG = {
     'symbol': 'BTC/USDT:USDT',  # OKX的合约符号格式
     'leverage': 10,  # 杠杆倍数,只影响保证金不影响下单价值
-    'timeframe': '15m',  # 使用15分钟K线
+    'timeframe': '5m',  # 使用15分钟K线
     'test_mode': False,  # 测试模式
     'data_points': 96,  # 24小时数据（96根15分钟K线）
     'analysis_periods': {
@@ -1019,12 +1019,7 @@ def wait_for_next_period():
 
 
 def trading_bot():
-    # 等待到整点再执行
-    wait_seconds = wait_for_next_period()
-    if wait_seconds > 0:
-        time.sleep(wait_seconds)
-
-    """主交易机器人函数"""
+    """主交易机器人函数（每60秒执行一次）"""
     print("\n" + "=" * 60)
     print(f"执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
@@ -1066,7 +1061,7 @@ def main():
         print("交易所初始化失败，程序退出")
         return
 
-    print("执行频率: 每15分钟整点执行")
+    print("执行频率: 每60秒执行一次")
 
     # 循环执行（不使用schedule）
     while True:
